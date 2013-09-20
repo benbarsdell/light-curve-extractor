@@ -1,0 +1,25 @@
+VERS_1.1 {
+         global:
+                lce_create;
+                lce_destroy;
+                lce_set_source_weights_by_image;
+                lce_set_source_weights_by_pixel;
+                lce_execute;
+                lce_execute_async;
+                lce_synchronize;
+                lce_get_width;
+                lce_get_height;
+                lce_get_bitdepth;
+                lce_get_nframes_device;
+                lce_get_device_idx;
+                lce_get_nsources;
+                lce_get_max_delay;
+                lce_get_pixel_weights;
+                lce_get_pixel_delays;
+                lce_get_error_string;
+                lce_set_nframes_device;
+                lce_register_memory;
+                lce_unregister_memory;
+         local:
+                *;
+};
