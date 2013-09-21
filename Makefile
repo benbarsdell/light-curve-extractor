@@ -61,6 +61,12 @@ ptx: $(PTX_NAME)
 $(PTX_NAME): $(SOURCES) $(LIB_DIR)/liblce.so $(HEADERS)
 	$(NVCC) -ptx -Xcompiler "-fPIC -Wall" $(OPTIMISE) $(DEBUG) -arch=$(GPU_ARCH) $(INCLUDE) -o $(PTX_NAME) $(SRC_DIR)/lce.cu
 
+install: $(SO_NAME)
+	cp $(INTERFACE)                             $(SYSTEM_INC_DIR)
+	cp $(SO_FILE)                               $(SYSTEM_LIB_DIR)
+	cp $(LIB_DIR)/$(LIB_NAME)$(SO_EXT).$(MAJOR) $(SYSTEM_LIB_DIR)
+	cp $(LIB_DIR)/$(LIB_NAME)$(SO_EXT)          $(SYSTEM_LIB_DIR)
+
 doc: $(SRC_DIR)/light_curve_extractor.h Doxyfile
 	$(DOXYGEN) Doxyfile
 
