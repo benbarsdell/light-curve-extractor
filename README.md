@@ -19,29 +19,28 @@ Building
 --------
 To build the library:
 
-Edit Makefile.inc to match your system configuration
-
-$ make
+> Edit Makefile.inc to match your system configuration
+> $ make
 
 To install the library system-wide:
 
-$ make install
+> $ make install
 
 To build the API documentation:
 
-$ make doc
+> $ make doc
 
 Usage
 -----
 C and C++ applications can use the C API directly.
 
-#include <light_curve_extractor.h>
+> #include <light_curve_extractor.h>
 
-cc ... -llce ...
+> cc ... -llce ...
 
 Python applications can use the provided Python wrapper.
 
-from light_curve_extractor import LightCurveExtractor
+> from light_curve_extractor import LightCurveExtractor
 
 Contact
 -------
