@@ -5,7 +5,7 @@ VERS_1.1 {
                 lce_set_source_weights_by_image;
                 lce_set_source_weights_by_pixel;
                 lce_execute;
-                lce_execute_async;
+                lce_query_status;
                 lce_synchronize;
                 lce_get_width;
                 lce_get_height;

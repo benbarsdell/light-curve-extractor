@@ -18,7 +18,7 @@
   
   TODO: [Done]Add overlap frames to properly allow pixel delays
         [Done]Add support for per-source (and pixel) delays, just like weights
-        Add interface for passing in and returning to device memory
+        [Done]Add interface for passing in and returning to device memory
         Test code
         CPU implementation
         Benchmarks
@@ -156,6 +156,7 @@ struct lce_plan_t {
 	thrust::device_vector<float> d_pixel_delays;
 	cudaStream_t streams[LCE_NBUF];
 	cudaArray*   a_data[LCE_NBUF];
+	cudaEvent_t  finished_event;
 	
 	lce_size nsources;
 	thrust::device_vector<uint>   d_source_offsets;
@@ -164,6 +165,10 @@ struct lce_plan_t {
 	
 	thrust::device_vector<float>  d_light_curves;
 };
+
+bool multiple_bits_set(unsigned int flags) {
+	return ((flags & (flags - 1)) == 0);
+}
 
 lce_error allocate_data_arrays(lce_plan plan) {
 	cudaError_t cuda_error;
@@ -190,11 +195,11 @@ lce_error allocate_data_arrays(lce_plan plan) {
 		cudaExtent   extent = make_cudaExtent(plan->width, plan->height,
 		                                      plan->nframes_device
 		                                      + plan->overlap);
-		unsigned int flags  = 0;
+		unsigned int allocflags  = 0;
 		cuda_error = cudaMalloc3DArray(&plan->a_data[buf],
 		                               &channel_desc,
 		                               extent,
-		                               flags);
+		                               allocflags);
 		if( cuda_error != cudaSuccess ) {
 			throw_cuda_error(cuda_error, LCE_MEM_ALLOC_FAILED);
 		}
@@ -276,6 +281,15 @@ lce_error lce_create(lce_plan*    plan,
 	newplan->nsources       = 0;
 	
 	cudaError_t cuda_error;
+	
+	// Create a CUDA event to record when computation has finished
+	cuda_error = cudaEventCreateWithFlags(&newplan->finished_event,
+	                                      cudaEventDisableTiming |
+	                                      cudaEventBlockingSync);
+	if( cuda_error != cudaSuccess ) {
+		throw_cuda_error(cuda_error, LCE_GPU_ERROR);
+	}
+	
 	cuda_error = cudaSetDevice(device_idx);
 	if( cuda_error != cudaSuccess ) {
 		if( cuda_error == cudaErrorInvalidDevice ) {
@@ -338,6 +352,7 @@ void lce_destroy(lce_plan plan) {
 		return;
 	}
 	cudaSetDevice(plan->device_idx);
+	cudaEventDestroy(plan->finished_event);
 	for( int buf=0; buf<LCE_NBUF; ++buf ) {
 		cudaStreamDestroy(plan->streams[buf]);
 		cudaFreeArray(plan->a_data[buf]);
@@ -561,9 +576,10 @@ int lce_set_source_weights_by_pixel(lce_plan        plan,
 	
 }
 */
-lce_error copy_h2d(const lce_plan plan,
-                   const void*    data,
-                   int            buf) {
+lce_error copy_input(const lce_plan plan,
+                     const void*    data,
+                     int            buf,
+                     unsigned int   flags) {
 	assert(plan != 0);
 	
 	cudaError_t error;
@@ -584,7 +600,18 @@ lce_error copy_h2d(const lce_plan plan,
 	copyParams.extent   = make_cudaExtent(plan->width,
 	                                      plan->height,
 	                                      plan->nframes_device + plan->overlap);
-	copyParams.kind     = cudaMemcpyHostToDevice;
+	if( !(flags & LCE_INPUT_MASK) ) {
+		flags |= LCE_DEFAULT_INPUT;
+	}
+	else if( multiple_bits_set(flags & LCE_INPUT_MASK) ) {
+		throw_error(LCE_INVALID_FLAGS);
+	}
+	switch( flags ) {
+	case LCE_HOST_INPUT:   copyParams.kind = cudaMemcpyHostToDevice; break;
+	case LCE_DEVICE_INPUT: copyParams.kind = cudaMemcpyDeviceToDevice; break;
+	default: copyParams.kind = cudaMemcpyHostToDevice;
+	}
+	
 	error = cudaMemcpy3DAsync(&copyParams, stream);
 	
 	if( error != cudaSuccess ) {
@@ -594,7 +621,8 @@ lce_error copy_h2d(const lce_plan plan,
 }
 lce_error compute(const lce_plan plan,
                   float*         light_curves,
-                  int            buf) {
+                  int            buf,
+                  unsigned int   flags) {
 	assert(plan != 0);
 	
 	enum { BLOCK_SIZE = LCE_KERNEL_BLOCK_SIZE };
@@ -653,10 +681,22 @@ lce_error compute(const lce_plan plan,
 #endif
 	
 	// Copy results back to host
+	if( !(flags & LCE_OUTPUT_MASK) ) {
+		flags = LCE_DEFAULT_OUTPUT;
+	}
+	else if( multiple_bits_set(flags & LCE_OUTPUT_MASK) ) {
+		throw_error(LCE_INVALID_FLAGS);
+	}
+	cudaMemcpyKind memcpykind;
+	switch( flags ) {
+	case LCE_HOST_OUTPUT:   memcpykind = cudaMemcpyDeviceToHost; break;
+	case LCE_DEVICE_OUTPUT: memcpykind = cudaMemcpyDeviceToDevice; break;
+	default: memcpykind = cudaMemcpyDeviceToHost;
+	}
 	size_t light_curve_nbytes = (plan->nframes_device * plan->nsources
 	                             * sizeof(float));
 	cuda_error = cudaMemcpyAsync((void*)light_curves, (void*)d_light_curves_ptr,
-	                             light_curve_nbytes, cudaMemcpyDeviceToHost,
+	                             light_curve_nbytes, memcpykind,
 	                             stream);
 	if( cuda_error != cudaSuccess ) {
 		throw_cuda_error(cuda_error, LCE_MEM_COPY_FAILED);
@@ -664,10 +704,11 @@ lce_error compute(const lce_plan plan,
 	
 	return LCE_NO_ERROR;
 }
-lce_error lce_execute_async(const lce_plan plan,
-                            lce_size       nframes,
-                            const void*    data,
-                            float*         light_curves) {
+lce_error lce_execute(const lce_plan plan,
+                      lce_size       nframes,
+                      const void*    data,
+                      float*         light_curves,
+                      unsigned int   flags) {
 	if( !plan ) {
 		throw_error(LCE_INVALID_PLAN);
 	}
@@ -678,6 +719,10 @@ lce_error lce_execute_async(const lce_plan plan,
 		throw_error(LCE_INVALID_NFRAMES);
 	}
 	
+	// TODO: Remove this when done benchmarking (or integrate properly)
+	Stopwatch timer;
+	timer.start();
+	
 	cudaSetDevice(plan->device_idx);
 	
 	size_t npipe        = nframes_computed / plan->nframes_device;
@@ -686,43 +731,56 @@ lce_error lce_execute_async(const lce_plan plan,
 	size_t out_stride   = plan->nframes_device * plan->nsources;
 	
 	size_t pipe = 0;
-	copy_h2d(plan, (char*)data + pipe*in_stride, pipe % LCE_NBUF);
+	copy_input(plan, (char*)data + pipe*in_stride,
+	           pipe % LCE_NBUF, flags);
 	while( pipe < npipe-1 ) {
-		copy_h2d(plan, (char*)data + (pipe+1)*in_stride, (pipe+1) % LCE_NBUF);
-		compute(plan, light_curves + pipe*out_stride, pipe % LCE_NBUF);
+		copy_input(plan, (char*)data + (pipe+1)*in_stride,
+		           (pipe+1) % LCE_NBUF, flags);
+		compute(plan, light_curves + pipe*out_stride,
+		        pipe % LCE_NBUF, flags);
 		++pipe;
 	}
-	compute(plan, light_curves + pipe*out_stride, pipe % LCE_NBUF);
+	compute(plan, light_curves + pipe*out_stride,
+	        pipe % LCE_NBUF, flags);
+	// Record an event so we can check when computation is finished
+	cudaEventRecord(plan->finished_event, 0);
 	
-	return LCE_NO_ERROR;
-}
-lce_error lce_execute(const lce_plan plan,
-                      lce_size       nframes,
-                      const void*    data,
-                      float*         light_curves) {
-	
-	Stopwatch timer;
-	timer.start();
-	
-	lce_error ret = lce_execute_async(plan, nframes, data, light_curves);
-	if( ret != LCE_NO_ERROR ) {
-		throw_error(ret);
+	if( !(flags & LCE_SYNC_MASK) ) {
+		flags |= LCE_DEFAULT_SYNC;
 	}
-	cudaDeviceSynchronize();
-	cudaError_t error = cudaGetLastError();
-	if( error != cudaSuccess ) {
-		throw_cuda_error(error, LCE_GPU_ERROR);
+	else if( multiple_bits_set(flags & LCE_SYNC_MASK) ) {
+		throw_error(LCE_INVALID_FLAGS);
+	}
+	if( flags & LCE_SYNC ) {
+		lce_error err = lce_synchronize(plan);
+		if( err != LCE_NO_ERROR ) {
+			throw_error(err);
+		}
 	}
 	
+	// TODO: Remove this when done benchmarking (or integrate properly)
 	timer.stop();
 	printf("lce_execute time = %f s\n", timer.getTime());
 	printf("                 = %f fps\n", (nframes-plan->overlap)/timer.getTime());
 	
-	return ret;
+	return LCE_NO_ERROR;
+}
+lce_error lce_query_status(const lce_plan plan) {
+	cudaSetDevice(plan->device_idx);
+	cudaError_t cuda_error = cudaEventQuery(plan->finished_event);
+	if( cuda_error == cudaSuccess ) {
+		return LCE_NO_ERROR;
+	}
+	else if( cuda_error == cudaErrorNotReady ) {
+		return LCE_NOT_READY;
+	}
+	else {
+		throw_cuda_error(cuda_error, LCE_GPU_ERROR);
+	}
 }
 lce_error lce_synchronize(const lce_plan plan) {
 	cudaSetDevice(plan->device_idx);
-	cudaDeviceSynchronize();
+	cudaEventSynchronize(plan->finished_event);
 	cudaError_t error = cudaGetLastError();
 	if( error != cudaSuccess ) {
 		throw_cuda_error(error, LCE_GPU_ERROR);

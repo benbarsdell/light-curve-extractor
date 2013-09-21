@@ -47,11 +47,13 @@ typedef struct lce_plan_t* lce_plan;
 
 typedef enum {
 	LCE_NO_ERROR,
+	LCE_NOT_READY,
 	LCE_INVALID_PLAN,
 	LCE_INVALID_BITDEPTH,
 	LCE_INVALID_NFRAMES,
 	LCE_INVALID_DEVICE,
 	LCE_INVALID_DELAY,
+	LCE_INVALID_FLAGS,
 	LCE_MEM_ALLOC_FAILED,
 	LCE_MEM_COPY_FAILED,
 	LCE_GPU_ERROR,
@@ -64,12 +66,40 @@ typedef enum {
  * LCE_INVALID_PLAN: The given plan is NULL.\n
  * LCE_INVALID_BITDEPTH: The specified bitdepth is unsupported; supported values are: 8 (uchar), 16 (ushort), 32 (float).\n
  * LCE_INVALID_NFRAMES: The given number of frames is 0 or not a multiple of the value returned by \p lce_get_nframes_device.\n
- * LCE_INVALID_DEVICE: The given GPU device index is invalid (no such device was detected in the system)
- * LCE_INVALID_DELAY: The total delay for a given source and pixel was negative; only positive delays are supported
+ * LCE_INVALID_DEVICE: The given GPU device index is invalid (no such device was detected in the system).\n
+ * LCE_INVALID_DELAY: The total delay for a given source and pixel was negative; only positive delays are supported.\n
+ * LCE_INVALID_FLAGS: The given flag(s) or combination of flags was invalid.\n
  * LCE_MEM_ALLOC_FAILED: A memory allocation failed.\n
  * LCE_MEM_COPY_FAILED: A memory copy failed.\n
  * LCE_GPU_ERROR: An error occurred relating to the GPU device.\n
  * LCE_UNKNOWN_ERROR: An unexpected error has occurred. Please contact the author(s) if you get this error.
+ */
+
+typedef enum {
+	LCE_SYNC           = 1 << 0,
+	LCE_ASYNC          = 1 << 1,
+	LCE_SYNC_MASK      = LCE_SYNC | LCE_ASYNC,
+	LCE_DEFAULT_SYNC   = LCE_SYNC,
+	
+	LCE_HOST_INPUT     = 1 << 2,
+	LCE_DEVICE_INPUT   = 1 << 3,
+	LCE_INPUT_MASK     = LCE_HOST_INPUT | LCE_DEVICE_INPUT,
+	LCE_DEFAULT_INPUT  = LCE_HOST_INPUT,
+	
+	LCE_HOST_OUTPUT    = 1 << 4,
+	LCE_DEVICE_OUTPUT  = 1 << 5,
+	LCE_OUTPUT_MASK    = LCE_HOST_OUTPUT | LCE_DEVICE_OUTPUT,
+	LCE_DEFAULT_OUTPUT = LCE_HOST_OUTPUT,
+} lce_execute_flags;
+
+/*! \enum lce_execute_flags
+ * Execution flags for the library:\n
+ * LCE_SYNC: Wait for the computation to finish before returning.\n
+ * LCE_ASYNC: Do not wait for the computation to finish before returning.\n
+ * LCE_HOST_INPUT: Input data passed to the library resides on the host.\n
+ * LCE_DEVICE_INPUT: Input data passed to the library resides on the device.\n
+ * LCE_HOST_OUTPUT: Output memory passed to the library resides on the host.\n
+ * LCE_DEVICE_OUTPUT: Output memory passed to the library resides on the device.\n
  */
 
 /*! \p lce_create builds a new plan object using the given parameters
@@ -137,21 +167,35 @@ int lce_set_source_weights_by_pixel(lce_plan        plan,
  *                   required overlap has been subtracted (see \ref lce_get_max_delay).
  *  \param data Pointer to the image sequence data, ordered [frame][row][column]
  *  \param light_curves Pointer to memory where output light curves will be placed, ordered [frame][source]
+ *  \param flags (Optional) flags for plan execution. Combine flags with the '|' operator.
  *  \note The number of extraced frames in each light curve will be \p nframes - \p lce_get_max_delay(plan)
  */
 lce_error lce_execute(const lce_plan plan,
                       lce_size       nframes,
                       const void*    data,
-                      float*         light_curves);
+                      float*         light_curves,
+                      unsigned int   flags);
 /*! \p lce_execute_async asynchronously executes a plan to extract light curves from the given data\n
  *  See \ref lce_execute for details
  *  \note This function returns immediately, i.e., before the computation has finished.
  *          Call \p lce_synchronize to wait for execution to complete.
  */
+/*
 lce_error lce_execute_async(const lce_plan plan,
                             lce_size       nframes,
                             const void*    data,
-                            float*         light_curves);
+                            float*         light_curves,
+                            unsigned int   flags);
+*/
+
+/*! \p lce_query_status queries the status of plan execution, returning
+ *       LCE_NO_ERROR if execution is finsihed, LCE_NOT_READY if execution
+ *       is still in process, or another error code if an error occurred
+ *       during plan execution.
+ *
+ *  \param plan The plan to query
+ */
+lce_error lce_query_status(const lce_plan plan);
 
 /*! \p lce_synchronize waits for the asynchronous execution of a plan to complete before returning
  *

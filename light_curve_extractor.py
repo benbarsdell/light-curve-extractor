@@ -41,6 +41,7 @@ class LCE_PLAN_STRUCT(Structure):
 LCE_PLAN = POINTER(LCE_PLAN_STRUCT)
 
 class LightCurveExtractor(object):
+	# TODO: Any way to automatically ensure these match the library?
 	LCE_NO_ERROR = 0
 	def _check_error(self, ret):
 		if ret != self.LCE_NO_ERROR:
@@ -86,7 +87,8 @@ class LightCurveExtractor(object):
 		                                               c_float(zero_thresh),
 		                                               source_delays_ptr)
 		self._check_error(ret)
-	def execute(self, nframes, data, light_curves=None):
+	"""
+	def execute(self, nframes, data, light_curves=None, flags=0):
 		allocated_data = False
 		if not isinstance(data, numpy.ndarray) or data.dtype != self.dtype:
 			allocated_data = True
@@ -104,7 +106,8 @@ class LightCurveExtractor(object):
 		ret = self.lib.lce_execute(self.obj,
 		                           nframes,
 		                           data_ptr,
-		                           light_curves_ptr)
+		                           light_curves_ptr,
+		                           flags)
 		self._check_error(ret)
 		
 		if allocated_light_curves:
@@ -113,8 +116,8 @@ class LightCurveExtractor(object):
 			self.unregister_memory(data)
 			
 		return light_curves
-	
-	def execute_async(self, nframes, data, light_curves=None):
+	"""
+	def execute(self, nframes, data, light_curves=None, flags=0):
 		allocated_data = False
 		if not isinstance(data, numpy.ndarray) or data.dtype != self.dtype:
 			allocated_data = True
@@ -131,10 +134,11 @@ class LightCurveExtractor(object):
 			
 		light_curves_ptr = self._light_curves.ctypes.data_as(POINTER(c_float))
 		
-		ret = self.lib.lce_execute_async(self.obj,
-		                                 nframes,
-		                                 data_ptr,
-		                                 light_curves_ptr)
+		ret = self.lib.lce_execute(self.obj,
+		                           nframes,
+		                           data_ptr,
+		                           light_curves_ptr,
+		                           flags)
 		self._check_error(ret)
 		
 		if allocated_light_curves:
@@ -142,6 +146,13 @@ class LightCurveExtractor(object):
 		if allocated_data:
 			self.unregister_memory(data)
 		
+		if self.query_status() == self.LCE_NO_ERROR:
+			return self._light_curves
+		else:
+			return None
+		
+	def query_status(self):
+		return self.lib.lce_query_status(self.obj)
 	def synchronize(self):
 		ret = self.lib.lce_synchronize(self.obj)
 		self._check_error(ret)
